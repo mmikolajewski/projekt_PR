@@ -1,0 +1,296 @@
+
+Jeśli chcesz sprawdzić czy CUDA widzi kartę:
+
+nvidia-smi
+nvcc --version
+
+
+OPIS PARAMETRÓW PROGRAMU
+--N <wartość>
+
+Rozmiar macierzy wejściowej.
+Określa wymiar tablicy danych wejściowych N × N.
+
+--R <wartość>
+
+Promień obszaru obliczeń.
+Dla każdego elementu wyjściowego sumowane są wartości z obszaru o rozmiarze (2R + 1) × (2R + 1).
+
+--BS <wartość>
+
+Rozmiar dwuwymiarowego bloku wątków CUDA.
+Blok zawiera BS × BS wątków.
+
+--check
+
+Włącza sprawdzanie poprawności obliczeń.
+Wyniki uzyskane na GPU są porównywane z wynikami obliczeń sekwencyjnych na CPU.
+
+
+kompilacja
+nvcc -O3 cuda.cu -o cuda
+
+SZYBKI TEST JEDNEGO URUCHOMIENIA np
+./cuda --N 2048 --R 8 --BS 16 --k 1 --check
+
+BENCH MODE (k = 1,2,8 dla jednego N,R,BS)
+./cuda --bench --N 4096 --R 8 --BS 16 --check
+
+AUTO MODE (pełen eksperyment: N_wys + wpływ k)
+./cuda --auto --check
+
+!!!!!!!!!!!!!!!!!!!!!PEŁNE SPRAWDZENIE POPRAWNOŚCI (WOLNE!)!!!!!!!!!!!!!!!!!!
+./cuda --auto --fullcheck
+
+
+======================================================================
+0) CO TO JEST “AUTO MODE” I PO CO
+======================================================================
+AUTO MODE robi dokładnie to, co jest w wymaganiach:
+
+ETAP 1 (SATURATION): dla BS = 8,16,32 oraz dla dwóch R:
+  R1 = BS/2  (czyli R < BS)
+  R2 = 2*BS  (czyli R > BS)
+robi sweep po N (lista Nlist) i szuka N_wys (wysycenia obliczeniami).
+
+ETAP 2 (k impact): dla macierzy 2*N_wys x 2*N_wys bada wpływ k = 1,2,8
+(przy czym większe k zmniejsza grid w osi X ~k razy, bo 1 wątek liczy k wyników).
+
+Wymagane w sprawozdaniu tabele:
+- 2 osobne tabele CZASU [ms] dla R1 i R2 (dla różnych BS)
+- 2 osobne tabele PRĘDKOŚCI [GF/s] dla R1 i R2 (dla różnych BS)
+- osobno wyniki ETAPU 2 (k=1,2,8) przy N=2*N_wys
+
+
+======================================================================
+1) JAK CZYTAĆ POJEDYNCZY WIERSZ W “SATURATION TEST”
+======================================================================
+Przykład wiersza:
+  4096 | 12.098 111.9 | 20.621 65.6 | 4.267 317.3 | 7.449 181.7 | A:OK B:OK C:OK D:OK
+
+Znaczenie:
+- pierwsza kolumna = N (rozmiar wejściowej macierzy TAB: N x N)
+- OUT ma rozmiar (N-2R) x (N-2R)  (czyli obliczenia są tylko dla środka, bez brzegów)
+
+Dalej są cztery warianty kerneli:
+A: global + coalesced (efektywny dostęp do global)
+B: global + non-coalesced (nieefektywny global)
+C: shared + coalesced (efektywny shared, ładowanie kolektywne)
+D: shared + bank conflicts (nieefektywny shared)
+
+Każdy wariant ma dwie liczby:
+  ms_X  = średni czas wykonania jednego uruchomienia kernela [ms]
+  GF_X  = prędkość = (liczba operacji na danych) / czas  [GF/s]
+
+CHECK:
+- “A:OK” znaczy, że wynik GPU dla wariantu A zgadza się z CPU (próbkowanie lub fullcheck).
+- “C:SKIP” znaczy, że wariant C nie mógł się uruchomić, bo za duży shared memory dla bloku.
+  Wtedy C i D dostają SKIP (bo oba używają shared).
+
+
+======================================================================
+2) SKĄD SIĘ BIORĄ ms i GF (JAKA FUNKCJA / JAKI FRAGMENT KODU)
+======================================================================
+
+A) POMIAR CZASU (ms):
+- dzieje się w funkcji:
+  ResultRow run_one_case(...)
+
+- konkretnie w lambdzie:
+  auto measure = [&](auto kernel, double &msOut, double &gfOut, ...)
+
+- tam używane są cudaEvent:
+  cudaEventRecord(start)
+  kernel<<<...>>>(...)
+  cudaEventRecord(stop)
+  cudaEventElapsedTime(&ms, start, stop)
+  msOut = ms / nIter
+
+Czyli ms to średnia z nIter uruchomień (u Ciebie w Stage1 nIter=3, w Stage2 nIter=1).
+
+B) PRĘDKOŚĆ (GF/s):
+- też w run_one_case() wewnątrz measure()
+
+- najpierw liczona jest liczba operacji na danych:
+  opsPerPixel = (2R+1)^2          (w Twoim algorytmie to tylko dodawania; mnożeń = 0)
+  totalOps = outSize*outSize*opsPerPixel
+
+- potem:
+  sec = msOut / 1000
+  gfOut = (totalOps * 1e-9) / sec
+
+WAŻNE DO SPRAWOZDANIA:
+- w tym algorytmie jest “czysta suma”, więc:
+  mnożenia = 0
+  dodawania na 1 punkt OUT = (2R+1)^2 (albo (2R+1)^2 - 1 zależnie od liczenia, ale Ty przyjąłeś (2R+1)^2)
+
+C) POPRAWNOŚĆ (CHECK):
+- verify_result() wywołuje cpu_radius_sum() i porównuje z GPU.
+- check jest robiony tylko dla pierwszego N w danym bloku (żeby nie spowalniać).
+
+
+======================================================================
+3) CO TO JEST N_wys I JAK TO CZYTAĆ Z WYDRUKU
+======================================================================
+Wydruk:
+  N_wys (estimated) = 8192
+
+Znaczy:
+- dla danego BS i R, od pewnego N prędkość (GF/s) przestaje rosnąć istotnie.
+- “plateau rule”: zmiana prędkości < 5% przez 2 kolejne kroki.
+
+UWAGA: U Ciebie N_wys jest liczone na podstawie GF z wariantu:
+- najpierw C (gfC),
+- jeśli C jest SKIP -> fallback na A (gfA).
+
+Gdzie to jest w kodzie:
+- funkcja:
+  int find_Nwys_from_rows(const std::vector<int>& Nlist, const std::vector<ResultRow>& rows, double eps)
+
+- w środku jest:
+  pickGF():
+    jeśli C nie SKIP -> bierze gfC
+    jeśli C SKIP     -> bierze gfA
+
+- plateau warunek (2 kroki):
+  rel1 = (g1-g0)/g0
+  rel2 = (g2-g1)/g1
+  jeśli rel1 < eps i rel2 < eps => N_wys = Nlist[i]
+
+Czyli: N_wys jest “minimalnym N od którego widać plateau” (wg Twojej reguły).
+
+
+======================================================================
+4) GDZIE SĄ WYMAGANE TABELE DLA STAGE 1 (R1 i R2)
+======================================================================
+Wydruki które spełniają wymaganie “2 tabele dla R1 i R2” to te cztery bloki:
+
+1) TABLE R1 (R < BS) (TIME ms)
+2) TABLE R1 (R < BS) (SPEED GF/s)
+3) TABLE R2 (R > BS) (TIME ms)
+4) TABLE R2 (R > BS) (SPEED GF/s)
+
+Jak to czytać:
+- Każdy wiersz to jedno N (z listy Nlist).
+- Każda kolumna to inny BS (8/16/32), ale dla konkretnego R (zależnego od BS).
+
+BARDZO WAŻNE:
+Te tabelki NIE pokazują A/B/C/D osobno.
+One pokazują “wybraną metrykę”:
+- jeśli C działa => bierzemy C (msC, gfC)
+- jeśli C SKIP   => bierzemy A (msA, gfA) jako fallback
+
+Czyli w tabelkach masz “najlepszy wariant shared (C) a jak nie da się shared, to najlepszy global (A)”.
+
+Gdzie to jest w kodzie:
+- w run_auto_mode() w Stage1 po wykonaniu run_one_case:
+  msPick = r.skipC ? r.msA : r.msC
+  gfPick = r.skipC ? r.gfA : r.gfC
+  okPick = r.skipC ? r.okA : r.okC
+
+- zapis do tablic:
+  stage1_ms[rrIdx][biIdx][slot] = msPick
+  stage1_gf[rrIdx][biIdx][slot] = gfPick
+  stage1_ok[rrIdx][biIdx][slot] = okPick
+  (oraz usedNvals/usedCount do mapowania N)
+
+- druk tabel robią lambdy:
+  print_big_table_ms(rrIdx, title)
+  print_big_table_gf(rrIdx, title)
+
+To one generują finalne tabele “dla sprawozdania”.
+
+
+======================================================================
+5) CZEMU C i D MAJĄ SKIP DLA BS=32 R=64
+======================================================================
+Wydruk:
+  BS=32 R=64 ... ms_C [SKIP] ... ms_D [SKIP]
+
+Powód:
+- C i D używają shared:
+  shBytes = (BS+2R)^2 * sizeof(float)
+
+Dla BS=32, R=64:
+  BS+2R = 32 + 128 = 160
+  tile = 160*160 = 25600 floatów
+  shBytes = 25600*4 = 102400 bajtów ~ 100 KB
+
+Jeśli Twoja karta ma sharedMemPerBlock = 48 KB albo 64 KB,
+to 100 KB przekracza limit -> SKIP.
+
+Gdzie w kodzie:
+- w measure() jest:
+  if (shBytes > prop.sharedMemPerBlock) skipFlag = true; return;
+
+
+======================================================================
+6) STAGE 2: JAK CZYTAĆ “K TEST” I CO TO JEST N=2*N_wys
+======================================================================
+Wymaganie mówi:
+“dla macierzy 2*N_wys x 2*N_wys zbadać wpływ k=1,2,8
+i że kolejne k redukują grid ~k razy”
+
+Wydruk:
+  BS=16 R=32 N_wys=2048 => N=4096 (target 2*N_wys=4096)
+  k list: 1 2 8
+  tabela z ms i GF dla A/B/C/D
+
+Czyli:
+- Najpierw Stage1 wyznacza N_wys dla (BS,R).
+- Potem Stage2 ustawia N = 2*N_wys (czasem masz LIMITy żeby nie zabić serwera).
+- Potem robi uruchomienia dla k=1,2,8 (czyli każdy wątek liczy k wyników).
+
+Gdzie w kodzie:
+- w run_auto_mode(), Stage2:
+  int N = 2 * Nwys;
+  (potem ewentualne ograniczenia MAX_KTEST_N i warunek dla R>=64)
+- pętla po k:
+  ResultRow r = run_one_case(N, R, BS, k, ...)
+
+WAŻNE:
+W Stage2 drukujesz już osobno A/B/C/D (pełna tabela), a nie “pick C albo fallback A”.
+
+
+======================================================================
+7) GDZIE JEST OSTATECZNA “ODPOWIEDŹ” DO SPRAWOZDANIA (CO PRZEPISAĆ)
+======================================================================
+
+A) ETAP 1 (N_wys):
+Masz gotowe w sekcji:
+  #################### SUMMARY (N_wys) ####################
+
+To jest “final answer” dla punktu 1 z wymagania:
+- dla każdego BS masz dwa N_wys: dla R1 i R2.
+
+B) ETAP 1 (TABELKI CZASU I PRĘDKOŚCI):
+Przepisujesz 4 tabelki:
+- TABLE R1 TIME
+- TABLE R1 SPEED
+- TABLE R2 TIME
+- TABLE R2 SPEED
+
+C) ETAP 2 (WPŁYW k):
+Przepisujesz wszystkie bloki “K TEST” (dla każdego BS i dla R1/R2):
+- bo to jest punkt 2 z wymagania.
+
+
+======================================================================
+8) SZYBKA CHECKLISTA ZGODNOŚCI Z WYMAGANIAMI (czy raport “się broni”)
+======================================================================
+[OK] jest CPU wersja sekwencyjna na float: cpu_radius_sum()
+[OK] dane niejednorodne: rnd + gradient (w run_one_case)
+[OK] BS = 8,16,32
+[OK] 4 warianty GPU: A,B,C,D zgodnie z opisem (global coalesced / global non / shared coalesced / shared conflicts)
+[OK] kolektywne ładowanie do shared (C i D)
+[OK] k = 1,2,8 testowane
+[OK] Stage1: szukanie N_wys i są tabelki (czas + prędkość) osobno dla R1 i R2
+[OK] Stage2: N = 2*N_wys i test wpływu k
+
+JEDYNE CO MUSISZ DOPISAĆ W SPRAWOZDANIU (żeby nikt się nie przyczepił):
+- “W tym algorytmie występują tylko dodawania (sum += ...), mnożeń = 0.
+  Liczbę operacji na danych przyjęto jako (2R+1)^2 dodawań na 1 punkt OUT.
+  Pętle sterujące i transfery danych nie są liczone do GF/s.”
+
+KONIEC
+======================================================================

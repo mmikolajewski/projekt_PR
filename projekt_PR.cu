@@ -15,6 +15,8 @@
 
 #include <cuda_runtime.h>
 #include <helper_cuda.h>
+#include <helper_timer.h>
+#include <helper_image.h>
 #include <cstdio>
 #include <cstdlib>
 #include <cmath>
@@ -54,7 +56,7 @@ void cpu_radius_sum(const float *tab, float *out, int N, int R)
 // Sprawdzenie poprawności
 // =========================
 // Porównuje GPU vs CPU. fullCheck=1 robi pełne porównanie (wolniej), inaczej próbkuje.
-bool verify_result(const float *h_in, const float *h_out_gpu, int N, int R, bool fullCheck)
+bool verify_result(const float *h_in, const float *h_out_gpu, int N, int R)
 {
     // obliczamy rozmiar tablicy wyjsciowej
     int outSize = N - 2 * R;
@@ -64,10 +66,9 @@ bool verify_result(const float *h_in, const float *h_out_gpu, int N, int R, bool
     std::vector<float> ref((size_t)outSize * (size_t)outSize);
     cpu_radius_sum(h_in, ref.data(), N, R);
 
-    int step = fullCheck ? 1 : 97; // "studencko": szybkie wykrywanie błędów indeksów
-    for (int y = 0; y < outSize; y += step)
+    for (int y = 0; y < outSize; y++)
     {
-        for (int x = 0; x < outSize; x += step)
+        for (int x = 0; x < outSize; x++)
         {
             float a = ref[(size_t)y * outSize + x];
             float b = h_out_gpu[(size_t)y * outSize + x];
@@ -140,7 +141,7 @@ void print_table_row(int N, const ResultRow &r)
 // 4) uruchamia 4 kerneli i mierzy cudaEvent
 // 5) liczy GFLOP/s
 // 6) opcjonalnie porównuje z CPU
-ResultRow run_one_case(int N, int R, int BS, int k, bool doCheck, bool fullCheck, int nIter, cudaDeviceProp prop)
+ResultRow run_one_case(int N, int R, int BS, int k, int nIter, cudaDeviceProp prop)
 {
     ResultRow res{};
     int outSize = N - 2 * R;
@@ -201,9 +202,16 @@ ResultRow run_one_case(int N, int R, int BS, int k, bool doCheck, bool fullCheck
         }
 
         // warmup
+        // https://docs.nvidia.com/cuda/cuda-programming-guide/04-special-topics/lazy-loading.html
+        // pierwsze uruchomienie kernela może być wolniejsze z powodu "lazy loading"
+
         kernel<<<grid, block, shBytes>>>(d_in, d_out, N, R, k);
         checkCudaErrors(cudaGetLastError());
         checkCudaErrors(cudaDeviceSynchronize());
+
+        // pomiar czasu za pomoscą funkcji z cuda_pomoc
+        StopWatchInterface *timer = NULL;
+        sdkCreateTimer(&timer);
 
         checkCudaErrors(cudaEventRecord(start));
         for (int i = 0; i < nIter; i++)
@@ -220,15 +228,8 @@ ResultRow run_one_case(int N, int R, int BS, int k, bool doCheck, bool fullCheck
         double sec = msOut / 1000.0;
         gfOut = (totalOps * 1e-9) / sec;
 
-        if (doCheck)
-        {
-            checkCudaErrors(cudaMemcpy(h_out, d_out, sizeOut, cudaMemcpyDeviceToHost));
-            okOut = verify_result(h_in, h_out, N, R, fullCheck);
-        }
-        else
-        {
-            okOut = true;
-        }
+        checkCudaErrors(cudaMemcpy(h_out, d_out, sizeOut, cudaMemcpyDeviceToHost));
+        okOut = verify_result(h_in, h_out, N, R);
     };
 
     // A, B (global)
@@ -308,7 +309,7 @@ static bool arg_flag(int argc, char **argv, const char *key)
 // =========================
 // Tryb bench (k=1,2,8 dla jednego N,R,BS)
 // =========================
-void run_bench_mode(int N, int R, int BS, bool check, bool fullCheck, cudaDeviceProp prop)
+void run_bench_mode(int N, int R, int BS, cudaDeviceProp prop)
 {
     int ks[3] = {1, 2, 8};
     printf("\n==================== BENCH MODE (k sweep) ====================\n");
@@ -317,7 +318,7 @@ void run_bench_mode(int N, int R, int BS, bool check, bool fullCheck, cudaDevice
     print_table_header();
     for (int i = 0; i < 3; i++)
     {
-        ResultRow r = run_one_case(N, R, BS, ks[i], check, fullCheck, 10, prop);
+        ResultRow r = run_one_case(N, R, BS, ks[i], 10, prop);
         // tu drukujemy "N" jako wiersz, ale żeby było czytelnie w bench,
         // drukujemy w miejscu N wartość "k"
         // (studencko: prosto – zmieniamy znaczenie pierwszej kolumny)
@@ -348,7 +349,7 @@ void run_bench_mode(int N, int R, int BS, bool check, bool fullCheck, cudaDevice
 // =========================
 // Etap 1: dla BS=8/16/32 i R1=BS/2, R2=2*BS robimy sweep po N i szukamy N_wys.
 // Etap 2: dla N=2*N_wys robimy sweep po k=1/2/8.
-void run_auto_mode(bool check, bool fullCheck, cudaDeviceProp prop)
+void run_auto_mode(cudaDeviceProp prop)
 {
     // "studencka" lista N – łatwo widać plateau
     // std::vector<int> Nlist = {512, 1024, 2048, 4096, 8192, 16384}; za duzo wolno przy 16384
@@ -429,9 +430,8 @@ void run_auto_mode(bool check, bool fullCheck, cudaDeviceProp prop)
                     // warunek z treści: N > 2R
                     continue;
                 }
-                // ResultRow r = run_one_case(N, R, BS, 1, check, fullCheck, 10, prop); zmiana na 3 bo za długo idzie
-                bool doCheckThis = check && (rows.empty()); // check tylko dla pierwszego N w bloku
-                ResultRow r = run_one_case(N, R, BS, 1, doCheckThis, fullCheck, 3, prop);
+                // ResultRow r = run_one_case(N, R, BS, 1, 10, prop); zmiana na 3 bo za długo idzie
+                ResultRow r = run_one_case(N, R, BS, 1, 3, prop);
 
                 print_table_row(N, r);
                 int rrIdx = rr;
@@ -619,9 +619,8 @@ void run_auto_mode(bool check, bool fullCheck, cudaDeviceProp prop)
             for (int ki = 0; ki < 3; ki++)
             {
                 int k = ks[ki];
-                bool doCheckThis = check && (ki == 0); // check tylko dla k=1
-                // ResultRow r = run_one_case(N, R, BS, k, doCheckThis, fullCheck, 3, prop); to potona
-                ResultRow r = run_one_case(N, R, BS, k, doCheckThis, fullCheck, 1, prop);
+                // ResultRow r = run_one_case(N, R, BS, k, 3, prop); to potona
+                ResultRow r = run_one_case(N, R, BS, k, 1, prop);
 
                 // druk jak w bench: pierwsza kolumna to k
                 printf("%-6d| %6.3f %6.1f | %6.3f %6.1f | ",
@@ -661,6 +660,20 @@ void run_auto_mode(bool check, bool fullCheck, cudaDeviceProp prop)
     printf("#########################################################\n");
 }
 
+void tabliczkaZnamionowa(cudaDeviceProp prop)
+{
+    printf("|================================================|\n");
+    printf("| TABLICZKA ZNAMIONOWA KARTY GRAFICZNEJ          |\n");
+    printf("|================================================|\n");
+    printf("| GPU: %30s | CC %2d.%-2d |\n", prop.name, prop.major, prop.minor);
+    printf("|================================================|\n");
+    printf("| Shared memory per block: %15zu bytes |\n", prop.sharedMemPerBlock);
+    printf("| Max threads per block: %23d |\n", prop.maxThreadsPerBlock);
+    printf("| Liczba SM: %35d |\n", prop.multiProcessorCount);
+    printf("| Liczba rejestrów na SM: %22d |\n", prop.regsPerMultiprocessor);
+    printf("|================================================|\n");
+}
+
 // =========================
 // main
 // =========================
@@ -672,36 +685,29 @@ int main(int argc, char **argv)
     int k = arg_int(argc, argv, "--k", 1);
 
     bool check = arg_flag(argc, argv, "--check");
-    bool full = arg_flag(argc, argv, "--fullcheck");
     bool bench = arg_flag(argc, argv, "--bench");
     bool autoMode = arg_flag(argc, argv, "--auto");
 
-    // GPU info
+    // Wybór karty graficznej
     int dev = 0;
     cudaSetDevice(dev);
+
+    // Pobranie danych o karcie graficznej
     cudaDeviceProp prop{};
     cudaGetDeviceProperties(&prop, dev);
 
-    printf("|================================================|\n");
-    printf("| TABLICZKA ZNAMIONOWA KARTY GRAFICZNEJ          |\n");
-    printf("|================================================|\n");
-    printf("| GPU: %30s | CC %2d.%-2d |\n", prop.name, prop.major, prop.minor);
-    printf("|================================================|\n");
-    printf("| Shared memory per block: %15zu bytes |\n", prop.sharedMemPerBlock);
-    printf("| Max threads per block: %23d |\n", prop.maxThreadsPerBlock);
-    printf("| Liczba SM: %35d |\n", prop.multiProcessorCount);
-    printf("| Liczba rejestrów na SM: %22d |\n", prop.regsPerMultiprocessor);
-    printf("|================================================|\n");
+    // Wyświetlenie tabliczki znamionowej
+    tabliczkaZnamionowa(prop);
 
     if (autoMode)
     {
-        run_auto_mode(check, full, prop);
+        run_auto_mode(prop);
         return 0;
     }
 
     if (bench)
     {
-        run_bench_mode(N, R, BS, check, full, prop);
+        run_bench_mode(N, R, BS, prop);
         return 0;
     }
 
@@ -711,11 +717,10 @@ int main(int argc, char **argv)
     printf("----------------------------------------------------\n");
     print_table_header();
 
-    ResultRow r = run_one_case(N, R, BS, k, check, full, 10, prop);
+    ResultRow r = run_one_case(N, R, BS, k, 10, prop);
     print_table_row(N, r);
 
     printf("====================================================\n");
-    printf("Tip: --check (sampled) albo --fullcheck (pełne, wolniej)\n");
     printf("Try: --bench (k=1,2,8) albo --auto (pełen komplet testów)\n");
 
     return 0;

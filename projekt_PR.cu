@@ -15,26 +15,12 @@
 
 #include <cuda_runtime.h>
 #include <helper_cuda.h>
-
 #include <cstdio>
 #include <cstdlib>
 #include <cmath>
 #include <cstring>
 #include <vector>
-
 #include "kernels.h"
-
-#define CHECK_CUDA(call)                                                    \
-    do                                                                      \
-    {                                                                       \
-        cudaError_t err = (call);                                           \
-        if (err != cudaSuccess)                                             \
-        {                                                                   \
-            fprintf(stderr, "CUDA ERROR: %s (%d) at %s:%d\n",               \
-                    cudaGetErrorString(err), (int)err, __FILE__, __LINE__); \
-            exit(1);                                                        \
-        }                                                                   \
-    } while (0)
 
 static inline int iDivUp(int a, int b) { return (a + b - 1) / b; }
 
@@ -70,7 +56,7 @@ void cpu_radius_sum(const float *tab, float *out, int N, int R)
 // Porównuje GPU vs CPU. fullCheck=1 robi pełne porównanie (wolniej), inaczej próbkuje.
 bool verify_result(const float *h_in, const float *h_out_gpu, int N, int R, bool fullCheck)
 {
-    // obliczamy rozmiar tablicy wyjsciowej    
+    // obliczamy rozmiar tablicy wyjsciowej
     int outSize = N - 2 * R;
     if (outSize <= 0)
         return false;
@@ -692,11 +678,20 @@ int main(int argc, char **argv)
 
     // GPU info
     int dev = 0;
-    checkCudaErrors(cudaSetDevice(dev));
+    cudaSetDevice(dev);
     cudaDeviceProp prop{};
-    checkCudaErrors(cudaGetDeviceProperties(&prop, dev));
-    printf("GPU: %s | CC %d.%d | sharedMemPerBlock=%zu bytes\n",
-           prop.name, prop.major, prop.minor, (size_t)prop.sharedMemPerBlock);
+    cudaGetDeviceProperties(&prop, dev);
+
+    printf("|================================================|\n");
+    printf("| TABLICZKA ZNAMIONOWA KARTY GRAFICZNEJ          |\n");
+    printf("|================================================|\n");
+    printf("| GPU: %30s | CC %2d.%-2d |\n", prop.name, prop.major, prop.minor);
+    printf("|================================================|\n");
+    printf("| Shared memory per block: %15zu bytes |\n", prop.sharedMemPerBlock);
+    printf("| Max threads per block: %23d |\n", prop.maxThreadsPerBlock);
+    printf("| Liczba SM: %35d |\n", prop.multiProcessorCount);
+    printf("| Liczba rejestrów na SM: %22d |\n", prop.regsPerMultiprocessor);
+    printf("|================================================|\n");
 
     if (autoMode)
     {

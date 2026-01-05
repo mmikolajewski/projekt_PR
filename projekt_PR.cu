@@ -131,6 +131,16 @@ void print_table_row(int N, const ResultRow &r)
     printf("%s\n", chk);
 }
 
+// funkcja z przykładów CUDA SDK Nvidia
+// Allocates a matrix with random float entries.
+void randomInit(float *data, int size)
+{
+    for (int i = 0; i < size; ++i) {
+        data[i] = rand() / static_cast<float>(RAND_MAX);
+    }
+}
+
+
 // =========================
 // Wykonanie jednego testu (N,R,BS,k) – liczy A,B,C,D + opcjonalnie check
 // =========================
@@ -158,17 +168,8 @@ ResultRow run_one_case(int N, int R, int BS, int k, int nIter, cudaDeviceProp pr
     float *h_in = (float *)malloc(sizeIn);
     float *h_out = (float *)malloc(sizeOut);
 
-    // niejednorodne dane: random + lekki gradient
-    srand(123);
-    for (int y = 0; y < N; y++)
-    {
-        for (int x = 0; x < N; x++)
-        {
-            float rnd = (float)rand() / (float)RAND_MAX;
-            float g = 0.001f * (float)(x + 3 * y);
-            h_in[(size_t)y * N + x] = rnd + g;
-        }
-    }
+    // Wypełnienie danych wejściowych (losowo)
+    randomInit(h_in, N * N);
 
     float *d_in = nullptr, *d_out = nullptr;
     checkCudaErrors(cudaMalloc(&d_in, sizeIn));
@@ -687,6 +688,9 @@ int main(int argc, char **argv)
     bool check = arg_flag(argc, argv, "--check");
     bool bench = arg_flag(argc, argv, "--bench");
     bool autoMode = arg_flag(argc, argv, "--auto");
+
+    // Ustwawienie losowości
+    srand((unsigned int)time(NULL));
 
     // Wybór karty graficznej
     int dev = 0;

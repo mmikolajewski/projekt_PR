@@ -1,8 +1,8 @@
 NVCC = nvcc
 CXX  = g++
 
-CXXFLAGS = -O3
-NVCCFLAGS = -O3
+CXXFLAGS = -O3 -I.
+NVCCFLAGS = -O3 -Icuda_pomoc
 
 OBJS = program_PR.o kernel_a.o kernel_b.o kernel_c.o kernel_d.o
 

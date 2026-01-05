@@ -6,6 +6,7 @@
 // Wariant C: najpierw ładowanie "tile" do shared (kolektywnie przez wszystkie wątki bloku),
 // potem liczenie sum z shared.
 // Shared ma rozmiar: (BS+2R) * (BS+2R).
+
 __global__ void kernel_C(const float* tab, float* out, int N, int R, int k) {
     extern __shared__ float s[];
 

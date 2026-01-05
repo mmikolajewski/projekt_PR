@@ -5,12 +5,12 @@
 // =========================
 // Wariant B: celowo psujemy lokalność (zamieniamy role tx/ty),
 // przez co wątki mogą czytać "porozrzucane" adresy.
+
 __global__ void kernel_B(const float* tab, float* out, int N, int R, int k) {
     int outSize = N - 2 * R;
 
     int tx = threadIdx.x;
     int ty = threadIdx.y;
-
 
     // UWAGA: tu psujemy coalescing: warp idzie po tx, więc robimy żeby y zależało od tx
     int y = blockIdx.y * blockDim.y + tx;          // <--- to jest klucz

@@ -7,6 +7,7 @@
 // Mapowanie wątków tak, żeby wątki w warpie często czytały sąsiednie adresy.
 // k wyników na wątek realizujemy przez skok:
 //   x = x_base + i * (gridDim.x * blockDim.x)
+
 __global__ void kernel_A(const float* tab, float* out, int N, int R, int k) {
     int outSize = N - 2 * R;
     int x_base = blockIdx.x * blockDim.x + threadIdx.x;

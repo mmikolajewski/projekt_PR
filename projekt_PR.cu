@@ -12,7 +12,6 @@
 //   ./radius_sum --bench --N 4096 --R 8 --BS 16 --check
 //   ./radius_sum --auto --check
 //
-// UWAGA: to jest kod "studencki" – prosto, czytelnie, bez wodotrysków.
 
 #include <cuda_runtime.h>
 #include <cstdio>
@@ -20,6 +19,9 @@
 #include <cmath>
 #include <cstring>
 #include <vector>
+
+#include "kernels.h"
+
 
 #define CHECK_CUDA(call) do {                                  \
     cudaError_t err = (call);                                  \
@@ -77,174 +79,6 @@ bool verify_result(const float* h_in, const float* h_out_gpu, int N, int R, bool
         }
     }
     return true;
-}
-
-// =========================
-// KERNEL A: global + coalesced
-// =========================
-// Wariant A: czytamy TAB tylko z globalnej pamięci.
-// Mapowanie wątków tak, żeby wątki w warpie często czytały sąsiednie adresy.
-// k wyników na wątek realizujemy przez skok:
-//   x = x_base + i * (gridDim.x * blockDim.x)
-__global__ void kernel_A(const float* tab, float* out, int N, int R, int k) {
-    int outSize = N - 2 * R;
-    int x_base = blockIdx.x * blockDim.x + threadIdx.x;
-    int y      = blockIdx.y * blockDim.y + threadIdx.y;
-
-    for (int i = 0; i < k; i++) {
-        int x = x_base + i * (gridDim.x * blockDim.x);
-        if (x < outSize && y < outSize) {
-            float sum = 0.0f;
-            int cy = y + R;
-            int cx = x + R;
-            for (int dy = -R; dy <= R; dy++) {
-                for (int dx = -R; dx <= R; dx++) {
-                    sum += tab[(cy + dy) * N + (cx + dx)];
-                }
-            }
-            out[(size_t)y * outSize + x] = sum;
-        }
-    }
-}
-
-// =========================
-// KERNEL B: global + non-coalesced
-// =========================
-// Wariant B: celowo psujemy lokalność (zamieniamy role tx/ty),
-// przez co wątki mogą czytać "porozrzucane" adresy.
-__global__ void kernel_B(const float* tab, float* out, int N, int R, int k) {
-    int outSize = N - 2 * R;
-
-    int tx = threadIdx.x;
-    int ty = threadIdx.y;
-
-
-    // UWAGA: tu psujemy coalescing: warp idzie po tx, więc robimy żeby y zależało od tx
-    int y = blockIdx.y * blockDim.y + tx;          // <--- to jest klucz
-    int x0 = blockIdx.x * blockDim.x + ty;         // <--- i to
-
-    for (int i = 0; i < k; i++) {
-        int x = x0 + i * (gridDim.x * blockDim.x);
-        if (x < outSize && y < outSize) {
-            float sum = 0.0f;
-            int cy = y + R;
-            int cx = x + R;
-            for (int dy = -R; dy <= R; dy++) {
-                for (int dx = -R; dx <= R; dx++) {
-                    sum += tab[(cy + dy) * N + (cx + dx)];
-                }
-            }
-            out[(size_t)y * outSize + x] = sum;
-        }
-    }
-}
-
-
-// =========================
-// KERNEL C: shared + efficient
-// =========================
-// Wariant C: najpierw ładowanie "tile" do shared (kolektywnie przez wszystkie wątki bloku),
-// potem liczenie sum z shared.
-// Shared ma rozmiar: (BS+2R) * (BS+2R).
-__global__ void kernel_C(const float* tab, float* out, int N, int R, int k) {
-    extern __shared__ float s[];
-
-    int outSize = N - 2 * R;
-    int bs = blockDim.x;
-    int tileW = bs + 2 * R;
-    int tileH = bs + 2 * R;
-
-    int tid = threadIdx.y * blockDim.x + threadIdx.x;
-    int nThreads = blockDim.x * blockDim.y;
-    int tileSize = tileW * tileH;
-
-    int blockOutY = blockIdx.y * bs;
-    int blockOutXBase = blockIdx.x * bs;
-
-    for (int i = 0; i < k; i++) {
-        int blockOutX = blockOutXBase + i * (gridDim.x * bs);
-
-        // Kolektywne ładowanie tile do shared
-        for (int idx = tid; idx < tileSize; idx += nThreads) {
-            int sy = idx / tileW;
-            int sx = idx - sy * tileW;
-
-            int inY = blockOutY + sy;
-            int inX = blockOutX + sx;
-
-            if (inY < N && inX < N) s[(size_t)sy * tileW + sx] = tab[(size_t)inY * N + inX];
-            else                    s[(size_t)sy * tileW + sx] = 0.0f;
-        }
-        __syncthreads();
-
-        int y = blockOutY + threadIdx.y;
-        int x = blockOutX + threadIdx.x;
-
-        if (y < outSize && x < outSize) {
-            float sum = 0.0f;
-            int csy = threadIdx.y + R;
-            int csx = threadIdx.x + R;
-            for (int dy = -R; dy <= R; dy++) {
-                for (int dx = -R; dx <= R; dx++) {
-                    sum += s[(size_t)(csy + dy) * tileW + (csx + dx)];
-                }
-            }
-            out[(size_t)y * outSize + x] = sum;
-        }
-        __syncthreads();
-    }
-}
-
-// =========================
-// KERNEL D: shared + bank-conflicts (celowo gorzej)
-// =========================
-// Wariant D: ładowanie tile identyczne jak w C,
-// ale przy obliczeniach celowo "przekręcamy" mapowanie (tx steruje Y, ty steruje X),
-// co często prowadzi do konfliktów banków w shared (gorsza wydajność).
-__global__ void kernel_D(const float* tab, float* out, int N, int R, int k) {
-    extern __shared__ float s[];
-
-    int outSize = N - 2 * R;
-    int bs = blockDim.x;
-    int tileW = bs + 2 * R;
-    int tileH = bs + 2 * R;
-
-    int tid = threadIdx.y * blockDim.x + threadIdx.x;
-    int nThreads = blockDim.x * blockDim.y;
-    int tileSize = tileW * tileH;
-
-    int blockOutY = blockIdx.y * bs;
-    int blockOutXBase = blockIdx.x * bs;
-
-    for (int i = 0; i < k; i++) {
-        int blockOutX = blockOutXBase + i * (gridDim.x * bs);
-
-        for (int idx = tid; idx < tileSize; idx += nThreads) {
-            int sy = idx / tileW;
-            int sx = idx - sy * tileW;
-            int inY = blockOutY + sy;
-            int inX = blockOutX + sx;
-            if (inY < N && inX < N) s[(size_t)sy * tileW + sx] = tab[(size_t)inY * N + inX];
-            else                    s[(size_t)sy * tileW + sx] = 0.0f;
-        }
-        __syncthreads();
-
-        int y = blockOutY + threadIdx.x; // swap
-        int x = blockOutX + threadIdx.y; // swap
-
-        if (y < outSize && x < outSize) {
-            float sum = 0.0f;
-            int csy = threadIdx.x + R;
-            int csx = threadIdx.y + R;
-            for (int dy = -R; dy <= R; dy++) {
-                for (int dx = -R; dx <= R; dx++) {
-                    sum += s[(size_t)(csy + dy) * tileW + (csx + dx)];
-                }
-            }
-            out[(size_t)y * outSize + x] = sum;
-        }
-        __syncthreads();
-    }
 }
 
 // =========================

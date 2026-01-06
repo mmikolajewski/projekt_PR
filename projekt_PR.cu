@@ -1,17 +1,10 @@
-// radius_sum_auto.cu
-// Projekt CUDA PKG: suma w promieniu R dla TAB[N*N] -> OUT[(N-2R)*(N-2R)]
-// 4 warianty kernela: A (global coalesced), B (global non-coalesced),
-// C (shared coalesced), D (shared bank conflicts)
-// + tryb AUTO: leci wszystkie testy i drukuje blokami.
-//
 // Kompilacja:
-//   nvcc -O3 radius_sum_auto.cu -o radius_sum
+//   make
 //
-// Przykłady:
-//   ./radius_sum --N 4096 --R 8 --BS 16 --k 1 --check
-//   ./radius_sum --bench --N 4096 --R 8 --BS 16 --check
-//   ./radius_sum --auto --check
-//
+// Uruchomienie:
+//   ./radius_sum --N 4096 --R 8 --BS 16 --k 1
+//   ./radius_sum --bench --N 4096 --R 8 --BS 16
+//   ./radius_sum --auto
 
 #include <cuda_runtime.h>
 #include <helper_cuda.h>
@@ -30,9 +23,8 @@
 static inline int iDivUp(int a, int b) { return (a + b - 1) / b; }
 
 // =========================
-// CPU reference (1 wątek)
+// Obliczanie tablicy OUT na CPU
 // =========================
-// Funkcja liczy OUT na CPU (sekwencyjnie). To jest "wzorzec" do testu poprawności GPU.
 void cpu_radius_sum(const float *tab, float *out, int N, int R)
 {
     int outSize = N - 2 * R;
@@ -53,37 +45,6 @@ void cpu_radius_sum(const float *tab, float *out, int N, int R)
             out[y * outSize + x] = sum;
         }
     }
-}
-
-// =========================
-// Sprawdzenie poprawności
-// =========================
-// Porównuje GPU vs CPU. fullCheck=1 robi pełne porównanie (wolniej), inaczej próbkuje.
-bool verify_result(const float *h_in, const float *h_out_gpu, int N, int R)
-{
-    // obliczamy rozmiar tablicy wyjsciowej
-    int outSize = N - 2 * R;
-    if (outSize <= 0)
-        return false;
-
-    std::vector<float> ref((size_t)outSize * (size_t)outSize);
-    cpu_radius_sum(h_in, ref.data(), N, R);
-
-    for (int y = 0; y < outSize; y++)
-    {
-        for (int x = 0; x < outSize; x++)
-        {
-            float a = ref[(size_t)y * outSize + x];
-            float b = h_out_gpu[(size_t)y * outSize + x];
-            float d = fabsf(a - b);
-            if (d > 1e-3f)
-            {
-                fprintf(stderr, "VERIFY FAIL at (y=%d,x=%d): CPU=%f GPU=%f diff=%f\n", y, x, a, b, d);
-                return false;
-            }
-        }
-    }
-    return true;
 }
 
 // =========================
@@ -134,15 +95,15 @@ void print_table_row(int N, const ResultRow &r)
     printf("%s\n", chk);
 }
 
-// funkcja z przykładów CUDA SDK Nvidia
+// funkcja skopiowana z przykładów CUDA SDK Nvidia
 // Allocates a matrix with random float entries.
 void randomInit(float *data, int size)
 {
-    for (int i = 0; i < size; ++i) {
+    for (int i = 0; i < size; ++i)
+    {
         data[i] = rand() / static_cast<float>(RAND_MAX);
     }
 }
-
 
 // =========================
 // Wykonanie jednego testu (N,R,BS,k) – liczy A,B,C,D + opcjonalnie check
@@ -237,7 +198,6 @@ ResultRow run_one_case(int N, int R, int BS, int k, int nIter, cudaDeviceProp pr
         gfOut = (totalOps * 1e-9) / sec;
 
         checkCudaErrors(cudaMemcpy(h_out, d_out, sizeOut, cudaMemcpyDeviceToHost));
-        //okOut = verify_result(h_in, h_out, N, R);
         okOut = compareData(ref.data(), h_out, outSize, EPS_VERIFY, 0.0f);
     };
 
@@ -295,24 +255,6 @@ int find_Nwys_from_rows(const std::vector<int> &Nlist, const std::vector<ResultR
     }
     // Jak nie znaleziono plateau, bierzemy największe N
     return Nlist.back();
-}
-
-// =========================
-// Proste parsowanie argumentów
-// =========================
-static int arg_int(int argc, char **argv, const char *key, int defVal)
-{
-    for (int i = 1; i < argc - 1; i++)
-        if (strcmp(argv[i], key) == 0)
-            return atoi(argv[i + 1]);
-    return defVal;
-}
-static bool arg_flag(int argc, char **argv, const char *key)
-{
-    for (int i = 1; i < argc; i++)
-        if (strcmp(argv[i], key) == 0)
-            return true;
-    return false;
 }
 
 // =========================
@@ -686,16 +628,33 @@ void tabliczkaZnamionowa(cudaDeviceProp prop)
 // =========================
 // main
 // =========================
-int main(int argc, char **argv)
+int main(int argc, const char **argv)
 {
-    int N = arg_int(argc, argv, "--N", 2048);
-    int R = arg_int(argc, argv, "--R", 8);
-    int BS = arg_int(argc, argv, "--BS", 16);
-    int k = arg_int(argc, argv, "--k", 1);
+    // dekodowanie argumentów wejściowych podanych przy uruchomieniu
+    int N = 2048;;
+    int R = 8;
+    int BS = 16;
+    int k = 1;
+    bool bench = false;
+    bool autoMode = false;
 
-    bool check = arg_flag(argc, argv, "--check");
-    bool bench = arg_flag(argc, argv, "--bench");
-    bool autoMode = arg_flag(argc, argv, "--auto");
+    if (checkCmdLineFlag(argc, argv, "N"))
+        N = getCmdLineArgumentInt(argc, argv, "N=");
+
+    if (checkCmdLineFlag(argc, argv, "R"))
+        R = getCmdLineArgumentInt(argc, argv, "R=");
+
+    if (checkCmdLineFlag(argc, argv, "BS"))
+        BS = getCmdLineArgumentInt(argc, argv, "BS=");
+
+    if (checkCmdLineFlag(argc, argv, "k"))
+        k = getCmdLineArgumentInt(argc, argv, "k=");
+
+    if (checkCmdLineFlag(argc, argv, "bench"))
+        bench = true;
+
+    if (checkCmdLineFlag(argc, argv, "auto"))
+        autoMode = true;
 
     // Ustwawienie losowości
     srand((unsigned int)time(NULL));

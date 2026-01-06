@@ -17,12 +17,15 @@
 #include <helper_cuda.h>
 #include <helper_timer.h>
 #include <helper_image.h>
+
 #include <cstdio>
 #include <cstdlib>
 #include <cmath>
 #include <cstring>
 #include <vector>
 #include "kernels.h"
+
+#define EPS_VERIFY 1e-5f
 
 static inline int iDivUp(int a, int b) { return (a + b - 1) / b; }
 
@@ -171,6 +174,10 @@ ResultRow run_one_case(int N, int R, int BS, int k, int nIter, cudaDeviceProp pr
     // Wypełnienie danych wejściowych (losowo)
     randomInit(h_in, N * N);
 
+    // obliczenie tablicy przez CPU do weryfikacji
+    std::vector<float> ref((size_t)outSize * (size_t)outSize);
+    cpu_radius_sum(h_in, ref.data(), N, R);
+
     float *d_in = nullptr, *d_out = nullptr;
     checkCudaErrors(cudaMalloc(&d_in, sizeIn));
 
@@ -230,7 +237,8 @@ ResultRow run_one_case(int N, int R, int BS, int k, int nIter, cudaDeviceProp pr
         gfOut = (totalOps * 1e-9) / sec;
 
         checkCudaErrors(cudaMemcpy(h_out, d_out, sizeOut, cudaMemcpyDeviceToHost));
-        okOut = verify_result(h_in, h_out, N, R);
+        //okOut = verify_result(h_in, h_out, N, R);
+        okOut = compareData(ref.data(), h_out, outSize, EPS_VERIFY, 0.0f);
     };
 
     // A, B (global)

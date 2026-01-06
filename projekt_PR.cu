@@ -20,6 +20,18 @@
 
 #define EPS_VERIFY 1e-5f
 
+// =========================
+// Struktura wyniku jednego testu
+// =========================
+struct ResultRow
+{
+    double msA = 0, msB = 0, msC = 0, msD = 0;
+    double gfA = 0, gfB = 0, gfC = 0, gfD = 0;
+    bool okA = true, okB = true, okC = true, okD = true;
+    bool skipC = false, skipD = false;
+};
+
+
 static inline int iDivUp(int a, int b) { return (a + b - 1) / b; }
 
 // =========================
@@ -46,17 +58,6 @@ void cpu_radius_sum(const float *tab, float *out, int N, int R)
         }
     }
 }
-
-// =========================
-// Struktura wyniku jednego testu
-// =========================
-struct ResultRow
-{
-    double msA = 0, msB = 0, msC = 0, msD = 0;
-    double gfA = 0, gfB = 0, gfC = 0, gfD = 0;
-    bool okA = true, okB = true, okC = true, okD = true;
-    bool skipC = false, skipD = false;
-};
 
 // =========================
 // Drukowanie nagłówka tabeli
@@ -302,9 +303,9 @@ void run_bench_mode(int N, int R, int BS, cudaDeviceProp prop)
 // Etap 2: dla N=2*N_wys robimy sweep po k=1/2/8.
 void run_auto_mode(cudaDeviceProp prop)
 {
-    // "studencka" lista N – łatwo widać plateau
     // std::vector<int> Nlist = {512, 1024, 2048, 4096, 8192, 16384}; za duzo wolno przy 16384
-    std::vector<int> Nlist = {1024, 2048, 4096, 8192};
+//    std::vector<int> Nlist = {1024, 2048, 4096, 8192};
+    std::vector<int> Nlist = {128, 256, 384, 512, 640, 768, 896, 1024, 1152, 1280, 1408, 1536, 1664, 1792, 1920, 2048};
 
     int BSlist[3] = {8, 16, 32};
     int ks[3] = {1, 2, 8};

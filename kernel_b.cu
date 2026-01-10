@@ -1,11 +1,5 @@
 #include "kernels.h"
 
-// =========================
-// KERNEL B: global + non-coalesced
-// =========================
-// Wariant B: celowo psujemy lokalność (zamieniamy role tx/ty),
-// przez co wątki mogą czytać "porozrzucane" adresy.
-
 __global__ void kernel_B(const float* tab, float* out, int N, int R, int k) {
     int outSize = N - 2 * R;
 

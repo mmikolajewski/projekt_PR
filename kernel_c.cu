@@ -1,12 +1,5 @@
 #include "kernels.h"
 
-// =========================
-// KERNEL C: shared + efficient
-// =========================
-// Wariant C: najpierw ładowanie "tile" do shared (kolektywnie przez wszystkie wątki bloku),
-// potem liczenie sum z shared.
-// Shared ma rozmiar: (BS+2R) * (BS+2R).
-
 __global__ void kernel_C(const float* tab, float* out, int N, int R, int k) {
     extern __shared__ float s[];
 
@@ -25,7 +18,6 @@ __global__ void kernel_C(const float* tab, float* out, int N, int R, int k) {
     for (int i = 0; i < k; i++) {
         int blockOutX = blockOutXBase + i * (gridDim.x * bs);
 
-        // Kolektywne ładowanie tile do shared
         for (int idx = tid; idx < tileSize; idx += nThreads) {
             int sy = idx / tileW;
             int sx = idx - sy * tileW;

@@ -2,9 +2,9 @@
 //   make
 //
 // Uruchomienie:
-//   ./radius_sum --N 4096 --R 8 --BS 16 --k 1
-//   ./radius_sum --bench --N 4096 --R 8 --BS 16
-//   ./radius_sum --auto
+//   ./projekt_PR --N 4096 --R 8 --BS 16 --k 1
+//   ./projekt_PR --bench --N 4096 --R 8 --BS 16
+//   ./projekt_PR --auto
 
 #include <cuda_runtime.h>
 #include <helper_cuda.h>
@@ -20,9 +20,6 @@
 
 #define EPS_VERIFY 1e-5f
 
-// =========================
-// Struktura wyniku jednego testu
-// =========================
 struct ResultRow
 {
     double msA = 0, msB = 0, msC = 0, msD = 0;
@@ -34,9 +31,6 @@ struct ResultRow
 
 static inline int iDivUp(int a, int b) { return (a + b - 1) / b; }
 
-// =========================
-// Obliczanie tablicy OUT na CPU
-// =========================
 void cpu_radius_sum(const float *tab, float *out, int N, int R)
 {
     int outSize = N - 2 * R;
@@ -59,18 +53,12 @@ void cpu_radius_sum(const float *tab, float *out, int N, int R)
     }
 }
 
-// =========================
-// Drukowanie nagłówka tabeli
-// =========================
 void print_table_header()
 {
     printf("N      |  ms_A   GF_A |  ms_B   GF_B |  ms_C   GF_C |  ms_D   GF_D | CHECK\n");
     printf("----------------------------------------------------------------------------------------------\n");
 }
 
-// =========================
-// Drukowanie jednego wiersza tabeli
-// =========================
 void print_table_row(int N, const ResultRow &r)
 {
     char chk[64];
@@ -106,16 +94,6 @@ void randomInit(float *data, int size)
     }
 }
 
-// =========================
-// Wykonanie jednego testu (N,R,BS,k) – liczy A,B,C,D + opcjonalnie check
-// =========================
-// To jest kluczowa funkcja "pomiarowa":
-// 1) alokuje tablice
-// 2) wypełnia dane (niejednorodne)
-// 3) kopiuje na GPU
-// 4) uruchamia 4 kerneli i mierzy cudaEvent
-// 5) liczy GFLOP/s
-// 6) opcjonalnie porównuje z CPU
 ResultRow run_one_case(int N, int R, int BS, int k, int nIter, cudaDeviceProp prop)
 {
     ResultRow res{};
@@ -136,7 +114,6 @@ ResultRow run_one_case(int N, int R, int BS, int k, int nIter, cudaDeviceProp pr
     // Wypełnienie danych wejściowych (losowo)
     randomInit(h_in, N * N);
 
-    // obliczenie tablicy przez CPU do weryfikacji
     std::vector<float> ref((size_t)outSize * (size_t)outSize);
     cpu_radius_sum(h_in, ref.data(), N, R);
 
@@ -151,8 +128,6 @@ ResultRow run_one_case(int N, int R, int BS, int k, int nIter, cudaDeviceProp pr
     int grid_h = iDivUp(outSize, BS);
     dim3 grid(grid_w, grid_h);
 
-    // Operacje: tu liczymy (2R+1)^2 "dodawań na piksel" – prosto.
-    // (W sprawozdaniu możesz dopisać dokładną definicję FLOP).
     double opsPerPixel = (double)(2 * R + 1) * (double)(2 * R + 1);
     double totalOps = (double)outSize * (double)outSize * opsPerPixel;
 
@@ -202,12 +177,12 @@ ResultRow run_one_case(int N, int R, int BS, int k, int nIter, cudaDeviceProp pr
         okOut = compareData(ref.data(), h_out, outSize, EPS_VERIFY, 0.0f);
     };
 
-    // A, B (global)
+    // A, B (Global)
     bool dummySkip = false;
     measure(kernel_A, res.msA, res.gfA, res.okA, 0, dummySkip);
     measure(kernel_B, res.msB, res.gfB, res.okB, 0, dummySkip);
 
-    // shared bytes for C/D
+    // C, D (Shared)
     size_t shBytes = (size_t)(BS + 2 * R) * (size_t)(BS + 2 * R) * sizeof(float);
     measure(kernel_C, res.msC, res.gfC, res.okC, shBytes, res.skipC);
     measure(kernel_D, res.msD, res.gfD, res.okD, shBytes, res.skipD);
@@ -222,11 +197,6 @@ ResultRow run_one_case(int N, int R, int BS, int k, int nIter, cudaDeviceProp pr
     return res;
 }
 
-// =========================
-// Wyznaczenie N_wys (plateau) – prosto, studencko
-// =========================
-// Bierzemy prędkość (GFLOP/s) z wariantu C, a jeśli C jest SKIP, to bierzemy A.
-// Kryterium plateau: wzrost < eps (np. 5%) przez 2 kolejne kroki.
 int find_Nwys_from_rows(const std::vector<int> &Nlist, const std::vector<ResultRow> &rows, double eps)
 {
     auto pickGF = [&](const ResultRow &r) -> double
@@ -250,17 +220,12 @@ int find_Nwys_from_rows(const std::vector<int> &Nlist, const std::vector<ResultR
 
         if (rel1 < eps && rel2 < eps)
         {
-            // minimalne N, od którego plateau "widać"
             return Nlist[i];
         }
     }
-    // Jak nie znaleziono plateau, bierzemy największe N
     return Nlist.back();
 }
 
-// =========================
-// Tryb bench (k=1,2,8 dla jednego N,R,BS)
-// =========================
 void run_bench_mode(int N, int R, int BS, cudaDeviceProp prop)
 {
     int ks[3] = {1, 2, 8};
@@ -271,9 +236,7 @@ void run_bench_mode(int N, int R, int BS, cudaDeviceProp prop)
     for (int i = 0; i < 3; i++)
     {
         ResultRow r = run_one_case(N, R, BS, ks[i], 10, prop);
-        // tu drukujemy "N" jako wiersz, ale żeby było czytelnie w bench,
-        // drukujemy w miejscu N wartość "k"
-        // (studencko: prosto – zmieniamy znaczenie pierwszej kolumny)
+
         printf("k=%-4d| %6.3f %6.1f | %6.3f %6.1f | ",
                ks[i], r.msA, r.gfA, r.msB, r.gfB);
         if (r.skipC)
@@ -296,24 +259,17 @@ void run_bench_mode(int N, int R, int BS, cudaDeviceProp prop)
     printf("==============================================================\n");
 }
 
-// =========================
-// Tryb auto (wszystko leci samo, blokami)
-// =========================
-// Etap 1: dla BS=8/16/32 i R1=BS/2, R2=2*BS robimy sweep po N i szukamy N_wys.
-// Etap 2: dla N=2*N_wys robimy sweep po k=1/2/8.
 void run_auto_mode(cudaDeviceProp prop)
 {
     // std::vector<int> Nlist = {512, 1024, 2048, 4096, 8192, 16384}; za duzo wolno przy 16384
-//    std::vector<int> Nlist = {1024, 2048, 4096, 8192};
+    // std::vector<int> Nlist = {1024, 2048, 4096, 8192};
     std::vector<int> Nlist = {128, 256, 384, 512, 640, 768, 896, 1024, 1152, 1280, 1408, 1536, 1664, 1792, 1920, 2048};
 
     int BSlist[3] = {8, 16, 32};
     int ks[3] = {1, 2, 8};
 
-    // kryterium plateau: <5% wzrost przez 2 kroki
     double eps = 0.05;
 
-    // zapamiętamy N_wys dla każdego BS i dla R1/R2
     struct NW
     {
         int R1;
@@ -323,22 +279,14 @@ void run_auto_mode(cudaDeviceProp prop)
     };
     NW summary[3];
 
-    // =========================================================
-    // STAGE 1: ZBIERANIE WYNIKÓW DO TABEL ZBIORCZYCH (R1 i R2)
-    // rr = 0 -> R1 (R < BS)
-    // rr = 1 -> R2 (R > BS)
-    // bi = 0..2 -> BS = {8,16,32}
-    // slot = index po N (kolejny element listy N)
-    // =========================================================
+    const int MAXN = 16;
 
-    const int MAXN = 16; // na zapas, bo Nlist ma mało elementów
-
-    double stage1_ms[2][3][MAXN] = {}; // czas [ms] (wybrane: C albo fallback A)
-    double stage1_gf[2][3][MAXN] = {}; // prędkość [GF/s] (wybrane: C albo fallback A)
+    double stage1_ms[2][3][MAXN] = {}; // czas [ms] (wybrane: C)
+    double stage1_gf[2][3][MAXN] = {}; // prędkość [GF/s] (wybrane: C)
     bool stage1_ok[2][3][MAXN] = {};   // poprawność (dla check)
 
-    int usedCount[2][3] = {};       // ile wpisów N zapisano dla (rr,bi)
-    int usedNvals[2][3][MAXN] = {}; // jakie N zapisano dla (rr,bi,slot)
+    int usedCount[2][3] = {};
+    int usedNvals[2][3][MAXN] = {};
 
     printf("\n==================== AUTO MODE ====================\n");
     printf("Plan: BS in {8,16,32}, R1=BS/2 (R<BS), R2=2*BS (R>BS)\n");
@@ -527,7 +475,6 @@ void run_auto_mode(cudaDeviceProp prop)
     print_big_table_ms(1, "TABLE R2 (R > BS)");
     print_big_table_gf(1, "TABLE R2 (R > BS)");
 
-    // ---------- ETAP 2: k ----------
     printf("\n#################### STAGE 2: k impact (N = 2*N_wys) ####################\n");
 
     for (int bi = 0; bi < 3; bi++)
@@ -543,23 +490,17 @@ void run_auto_mode(cudaDeviceProp prop)
             int N = 2 * Nwys;
 
             // --- LIMIT żeby nie zabić sesji na serwerze ---
-            const int MAX_KTEST_N = 8192; // możesz dać 4096 jeśli nadal za długo
+            const int MAX_KTEST_N = 8192;
             if (N > MAX_KTEST_N)
                 N = MAX_KTEST_N;
-
-            // dla r =  64 idzie w cholere długo, wiec aby wgl sie skonczyło daje warunek ze dla >64 ograniczenie do 4096
-            // Ze względu na ograniczenia czasowe środowiska uruchomieniowego zastosowano limit maksymalnego N w teście wpływu k.
-            //  Jeżeli 2*N_wys przekraczało limit, przyjęto N=8192 (a dla R≥64: N=4096) jako największą sensowną instancję możliwą do wykonania w czasie dostępnej sesji.
 
             if (R >= 64 && N > 4096)
                 N = 4096;
 
-            // jeśli z jakiegoś powodu N jest niepoprawne: jak co to zakoentwaoc gore i bedize miagac na 16..
             if (N <= 2 * R)
                 N = 4 * R + 2;
 
             printf("\n==================== K TEST ====================\n");
-            // printf("BS=%d  R=%d   N_wys=%d   => N=2*N_wys=%d\n", BS, R, Nwys, N);
             printf("BS=%d  R=%d   N_wys=%d   => N=%d (target 2*N_wys=%d)\n", BS, R, Nwys, N, 2 * Nwys);
 
             printf("k list: 1 2 8\n");
@@ -571,10 +512,8 @@ void run_auto_mode(cudaDeviceProp prop)
             for (int ki = 0; ki < 3; ki++)
             {
                 int k = ks[ki];
-                // ResultRow r = run_one_case(N, R, BS, k, 3, prop); to potona
                 ResultRow r = run_one_case(N, R, BS, k, 1, prop);
 
-                // druk jak w bench: pierwsza kolumna to k
                 printf("%-6d| %6.3f %6.1f | %6.3f %6.1f | ",
                        k, r.msA, r.gfA, r.msB, r.gfB);
 
@@ -601,7 +540,6 @@ void run_auto_mode(cudaDeviceProp prop)
         }
     }
 
-    // ---------- Summary ----------
     printf("\n#################### SUMMARY (N_wys) ####################\n");
     for (int bi = 0; bi < 3; bi++)
     {
@@ -626,9 +564,6 @@ void tabliczkaZnamionowa(cudaDeviceProp prop)
     printf("|================================================|\n");
 }
 
-// =========================
-// main
-// =========================
 int main(int argc, const char **argv)
 {
     // dekodowanie argumentów wejściowych podanych przy uruchomieniu

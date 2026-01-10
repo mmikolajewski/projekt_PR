@@ -1,12 +1,5 @@
 #include "kernels.h"
 
-// =========================
-// KERNEL D: shared + bank-conflicts (celowo gorzej)
-// =========================
-// Wariant D: ładowanie tile identyczne jak w C,
-// ale przy obliczeniach celowo "przekręcamy" mapowanie (tx steruje Y, ty steruje X),
-// co często prowadzi do konfliktów banków w shared (gorsza wydajność).
-
 __global__ void kernel_D(const float* tab, float* out, int N, int R, int k) {
     extern __shared__ float s[];
 

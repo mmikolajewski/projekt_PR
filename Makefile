@@ -1,26 +1,46 @@
 NVCC = nvcc
-CXX  = g++
-
-CXXFLAGS = -O3 -I.
 NVCCFLAGS = -O3 -Icuda_pomoc
 
-OBJS = program_PR.o kernel_a.o kernel_b.o kernel_c.o kernel_d.o
+# Nazwy programów
+TARGET1 = nwys
+TARGET2 = paramk
+TARGET3 = metryka
+TARGET4 = projekt_PR
 
-all: program_PR
+# Pliki główne
+SRC1 = nwys.cu
+SRC2 = paramk.cu
+SRC3 = metryka.cu
+SRC4 = projekt_PR.cu
 
-program_PR.o: projekt_PR.cu
-	$(NVCC) $(NVCCFLAGS) -c projekt_PR.cu -o program_PR.o
-kernel_a.o: kernel_a.cu
-	$(NVCC) $(NVCCFLAGS) -c kernel_a.cu -o kernel_a.o
-kernel_b.o: kernel_b.cu
-	$(NVCC) $(NVCCFLAGS) -c kernel_b.cu -o kernel_b.o
-kernel_c.o: kernel_c.cu
-	$(NVCC) $(NVCCFLAGS) -c kernel_c.cu -o kernel_c.o
-kernel_d.o: kernel_d.cu
-	$(NVCC) $(NVCCFLAGS) -c kernel_d.cu -o kernel_d.o   
+# Pliki wspólne
+COMMON = kernel_a.cu kernel_b.cu kernel_c.cu kernel_d.cu
 
-program_PR: $(OBJS)
-	$(NVCC) $(OBJS) -o projekt_PR
+# Obiekty
+OBJ1 = $(SRC1:.cu=.o)
+OBJ2 = $(SRC2:.cu=.o)
+OBJ3 = $(SRC3:.cu=.o)
+OBJ4 = $(SRC4:.cu=.o)
+OBJ_COMMON = $(COMMON:.cu=.o)
 
+# Domyślny cel
+all: $(TARGET1) $(TARGET2) $(TARGET3) $(TARGET4)
+# Linkowanie
+$(TARGET1): $(OBJ1) $(OBJ_COMMON)
+	$(NVCC) $(NVCCFLAGS) -o $@ $^
+
+$(TARGET2): $(OBJ2) $(OBJ_COMMON)
+	$(NVCC) $(NVCCFLAGS) -o $@ $^
+
+$(TARGET3): $(OBJ3) $(OBJ_COMMON)
+	$(NVCC) $(NVCCFLAGS) -o $@ $^
+
+$(TARGET4): $(OBJ4) $(OBJ_COMMON)
+	$(NVCC) $(NVCCFLAGS) -o $@ $^
+# Kompilacja .cu -> .o
+%.o: %.cu
+	$(NVCC) $(NVCCFLAGS) -c $< -o $@
+
+# Sprzątanie
 clean:
-	rm -f *.o projekt_PR
+	rm -f *.o $(TARGET1) $(TARGET2) $(TARGET3) $(TARGET4)

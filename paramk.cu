@@ -2,9 +2,7 @@
 //   make
 //
 // Uruchomienie:
-//   ./paramk --N 4096 --R 8 --BS 16 --k 1
-//   ./projekt_PR --bench --N 4096 --R 8 --BS 16
-//   ./projekt_PR --auto
+//   ./paramk --N 4096 --R 8 --BS 16
 
 #include <cuda_runtime.h>
 #include <helper_cuda.h>
